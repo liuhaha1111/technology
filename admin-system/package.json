@@ -1,0 +1,14 @@
+{
+  "name": "admin-system",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "admin-backend",
+    "admin-frontend"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace admin-backend",
+    "build": "npm run build --workspace admin-backend && npm run build --workspace admin-frontend",
+    "test": "npm run test --workspace admin-backend && npm run test --workspace admin-frontend"
+  }
+}
