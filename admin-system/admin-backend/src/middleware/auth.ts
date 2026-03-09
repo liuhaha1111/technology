@@ -11,6 +11,7 @@ export type RequestAuthUser = {
 type RequestWithAuth = Request & {
   authUser?: RequestAuthUser;
 };
+export type { RequestWithAuth };
 
 const unauthorized = (res: Response) =>
   res.status(401).json({
