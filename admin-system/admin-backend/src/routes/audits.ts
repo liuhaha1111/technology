@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, type RequestWithAuth } from "../middleware/auth";
 import { requirePermission } from "../middleware/rbac";
 import { analyticsService } from "../services/analytics-service";
 
@@ -11,7 +11,8 @@ const querySchema = z.object({
   size: z.coerce.number().min(1).max(100).default(20)
 });
 
-auditsRouter.get("/", requireAuth, requirePermission("audits.read"), (req, res) => {
+auditsRouter.get("/", requireAuth, requirePermission("audits.read"), async (req, res) => {
+  const authReq = req as RequestWithAuth;
   const parsed = querySchema.safeParse(req.query);
   if (!parsed.success) {
     return res.status(422).json({
@@ -22,13 +23,15 @@ auditsRouter.get("/", requireAuth, requirePermission("audits.read"), (req, res) 
     });
   }
 
+  const list = await analyticsService.listAudits(parsed.data.page, parsed.data.size, Boolean(authReq.authUser?.roleHint));
+
   return res.status(200).json({
     code: "OK",
     message: "Audit list",
     data: {
       page: parsed.data.page,
       size: parsed.data.size,
-      ...analyticsService.listAudits(parsed.data.page, parsed.data.size)
+      ...list
     },
     requestId: "local"
   });

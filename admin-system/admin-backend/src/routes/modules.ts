@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, type RequestWithAuth } from "../middleware/auth";
 import { resolveOrgScope } from "../middleware/org-scope";
 import { requirePermission } from "../middleware/rbac";
 import { modulesService } from "../services/modules-service";
@@ -14,7 +14,8 @@ const querySchema = z.object({
   orgUnitId: z.string().uuid().optional()
 });
 
-modulesRouter.get("/:moduleKey/records", requireAuth, requirePermission("modules.read"), (req, res) => {
+modulesRouter.get("/:moduleKey/records", requireAuth, requirePermission("modules.read"), async (req, res) => {
+  const authReq = req as RequestWithAuth;
   const query = querySchema.safeParse(req.query);
   if (!query.success) {
     return res.status(422).json({
@@ -45,7 +46,14 @@ modulesRouter.get("/:moduleKey/records", requireAuth, requirePermission("modules
       requestId: "local"
     });
   }
-  const result = modulesService.listRecords(moduleKey, query.data.page, query.data.size, scopedOrg, query.data.status);
+  const result = await modulesService.listRecords(
+    moduleKey,
+    query.data.page,
+    query.data.size,
+    scopedOrg,
+    query.data.status,
+    Boolean(authReq.authUser?.roleHint)
+  );
 
   return res.status(200).json({
     code: "OK",

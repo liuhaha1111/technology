@@ -11,7 +11,8 @@ const reviewSchema = z.object({
   comments: z.string().optional()
 });
 
-projectsRouter.post("/:id/review", requireAuth, requirePermission("modules.review"), (req, res) => {
+projectsRouter.post("/:id/review", requireAuth, requirePermission("modules.review"), async (req, res) => {
+  const authReq = req as RequestWithAuth;
   const parsed = reviewSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(422).json({
@@ -33,11 +34,12 @@ projectsRouter.post("/:id/review", requireAuth, requirePermission("modules.revie
     });
   }
 
-  const result = modulesService.reviewProject(
+  const result = await modulesService.reviewProject(
     projectId,
-    (req as RequestWithAuth).authUser?.authUserId ?? "unknown",
+    authReq.authUser?.authUserId ?? "unknown",
     parsed.data.decision,
-    parsed.data.comments
+    parsed.data.comments,
+    Boolean(authReq.authUser?.roleHint)
   );
 
   if (!result) {

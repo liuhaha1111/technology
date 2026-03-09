@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, type RequestWithAuth } from "../middleware/auth";
 import { resolveOrgScope } from "../middleware/org-scope";
 import { requirePermission } from "../middleware/rbac";
 import { usersService } from "../services/users-service";
@@ -25,7 +25,8 @@ const updateRolesSchema = z.object({
   roleKeys: z.array(z.string()).min(1)
 });
 
-usersRouter.get("/", requireAuth, requirePermission("users.read"), (req, res) => {
+usersRouter.get("/", requireAuth, requirePermission("users.read"), async (req, res) => {
+  const authReq = req as RequestWithAuth;
   const query = querySchema.safeParse(req.query);
   if (!query.success) {
     return res.status(422).json({
@@ -46,6 +47,14 @@ usersRouter.get("/", requireAuth, requirePermission("users.read"), (req, res) =>
     });
   }
 
+  const useMock = Boolean(authReq.authUser?.roleHint);
+  const usersData = await usersService.listUsers({
+    page: query.data.page,
+    size: query.data.size,
+    orgUnitId: scopedOrg,
+    useMock
+  });
+
   return res.status(200).json({
     code: "OK",
     message: "Users list",
@@ -53,13 +62,14 @@ usersRouter.get("/", requireAuth, requirePermission("users.read"), (req, res) =>
       page: query.data.page,
       size: query.data.size,
       orgUnitId: scopedOrg,
-      ...usersService.listUsers(query.data.page, query.data.size, scopedOrg)
+      ...usersData
     },
     requestId: "local"
   });
 });
 
-usersRouter.post("/", requireAuth, requirePermission("users.write"), (req, res) => {
+usersRouter.post("/", requireAuth, requirePermission("users.write"), async (req, res) => {
+  const authReq = req as RequestWithAuth;
   const parsed = createUserSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(422).json({
@@ -80,12 +90,13 @@ usersRouter.post("/", requireAuth, requirePermission("users.write"), (req, res) 
     });
   }
 
-  const user = usersService.createUser({
+  const user = await usersService.createUser({
     email: parsed.data.email,
     displayName: parsed.data.displayName,
     orgUnitId: parsed.data.orgUnitId,
     status: parsed.data.status,
-    roles: parsed.data.roles
+    roles: parsed.data.roles,
+    useMock: Boolean(authReq.authUser?.roleHint)
   });
 
   return res.status(201).json({
@@ -96,7 +107,8 @@ usersRouter.post("/", requireAuth, requirePermission("users.write"), (req, res) 
   });
 });
 
-usersRouter.put("/:id/roles", requireAuth, requirePermission("roles.write"), (req, res) => {
+usersRouter.put("/:id/roles", requireAuth, requirePermission("roles.write"), async (req, res) => {
+  const authReq = req as RequestWithAuth;
   const parsed = updateRolesSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(422).json({
@@ -118,7 +130,7 @@ usersRouter.put("/:id/roles", requireAuth, requirePermission("roles.write"), (re
     });
   }
 
-  const updated = usersService.assignRoles(userId, parsed.data.roleKeys);
+  const updated = await usersService.assignRoles(userId, parsed.data.roleKeys, Boolean(authReq.authUser?.roleHint));
   if (!updated) {
     return res.status(404).json({
       code: "NOT_FOUND",
