@@ -133,3 +133,58 @@ body {
   border-radius: 12px;
   padding: 16px;
 }
+
+.panel h2 {
+  margin-top: 0;
+}
+
+.simple-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+}
+
+.simple-table th,
+.simple-table td {
+  border: 1px solid #e2e8f0;
+  padding: 8px;
+  text-align: left;
+}
+
+.secondary-btn {
+  border: 1px solid #60a5fa;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.stats-grid > div {
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  padding: 10px;
+  background: #eff6ff;
+}
+
+@media (max-width: 1280px) {
+  .admin-main {
+    grid-template-columns: 180px 1fr;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

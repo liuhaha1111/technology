@@ -1,10 +1,14 @@
 import type { ReactElement } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { AdminLayout } from "./layout/AdminLayout";
+import { clearSession, ROLE_KEY, setSession, TOKEN_KEY, type RoleKey } from "./lib/session";
+import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { AuditsPage } from "./pages/AuditsPage";
+import { BusinessModulesPage } from "./pages/BusinessModulesPage";
+import { DashboardPage } from "./pages/DashboardPage";
 import { LoginPage } from "./pages/LoginPage";
-import { PlaceholderPage } from "./pages/PlaceholderPage";
-
-const TOKEN_KEY = "admin_system_access_token";
+import { RolesPage } from "./pages/RolesPage";
+import { UsersPage } from "./pages/UsersPage";
 
 function RequireAuth({ children }: { children: ReactElement }) {
   const token = localStorage.getItem(TOKEN_KEY);
@@ -19,7 +23,8 @@ function LoginRoute() {
   return (
     <LoginPage
       onLoggedIn={(token) => {
-        localStorage.setItem(TOKEN_KEY, token);
+        const currentRole = (localStorage.getItem(ROLE_KEY) as RoleKey) ?? "admin";
+        setSession(token, currentRole);
         navigate("/app", { replace: true });
       }}
     />
@@ -38,12 +43,12 @@ export function App() {
           </RequireAuth>
         }
       >
-        <Route index element={<PlaceholderPage title="系统概览" />} />
-        <Route path="users" element={<PlaceholderPage title="用户管理" />} />
-        <Route path="roles" element={<PlaceholderPage title="角色权限" />} />
-        <Route path="modules" element={<PlaceholderPage title="业务模块" />} />
-        <Route path="analytics" element={<PlaceholderPage title="统计分析" />} />
-        <Route path="audits" element={<PlaceholderPage title="操作审计" />} />
+        <Route index element={<DashboardPage />} />
+        <Route path="users" element={<UsersPage />} />
+        <Route path="roles" element={<RolesPage />} />
+        <Route path="modules" element={<BusinessModulesPage />} />
+        <Route path="analytics" element={<AnalyticsPage />} />
+        <Route path="audits" element={<AuditsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/app" replace />} />
     </Routes>
