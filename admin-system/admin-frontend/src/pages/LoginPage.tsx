@@ -1,8 +1,9 @@
 import { FormEvent, useState } from "react";
 import { login } from "../lib/api-client";
+import type { RoleKey } from "../lib/session";
 
 type LoginPageProps = {
-  onLoggedIn?: (token: string) => void;
+  onLoggedIn?: (token: string, role: RoleKey) => void;
 };
 
 export function LoginPage({ onLoggedIn }: LoginPageProps) {
@@ -27,10 +28,11 @@ export function LoginPage({ onLoggedIn }: LoginPageProps) {
     try {
       const result = await login({ email, password });
       const token = result?.data?.accessToken as string | undefined;
+      const role = (result?.data?.user?.role as RoleKey | undefined) ?? "viewer";
       if (!token) {
         throw new Error("缺少令牌");
       }
-      onLoggedIn?.(token);
+      onLoggedIn?.(token, role);
     } catch {
       setError("登录失败，请检查账号或密码");
     } finally {

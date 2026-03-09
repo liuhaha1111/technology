@@ -22,8 +22,8 @@ function LoginRoute() {
   const navigate = useNavigate();
   return (
     <LoginPage
-      onLoggedIn={(token) => {
-        const currentRole = (localStorage.getItem(ROLE_KEY) as RoleKey) ?? "admin";
+      onLoggedIn={(token, role) => {
+        const currentRole = role ?? ((localStorage.getItem(ROLE_KEY) as RoleKey) ?? "viewer");
         setSession(token, currentRole);
         navigate("/app", { replace: true });
       }}

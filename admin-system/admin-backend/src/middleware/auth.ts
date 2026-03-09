@@ -1,11 +1,12 @@
 import type { NextFunction, Request, Response } from "express";
-import { supabaseAnon } from "../lib/supabase";
+import { supabaseAdmin, supabaseAnon } from "../lib/supabase";
 
 export type RequestAuthUser = {
   authUserId: string;
   email: string;
   orgUnitId: string;
   roleHint?: string;
+  roles?: string[];
 };
 
 type RequestWithAuth = Request & {
@@ -20,6 +21,24 @@ const unauthorized = (res: Response) =>
     data: null,
     requestId: "local"
   });
+
+const forbidden = (res: Response, message = "Forbidden") =>
+  res.status(403).json({
+    code: "FORBIDDEN",
+    message,
+    data: null,
+    requestId: "local"
+  });
+
+const rolePriority: Record<string, number> = {
+  super_admin: 4,
+  admin: 3,
+  analyst: 2,
+  viewer: 1
+};
+
+const pickHighestRole = (roles: string[]): string | undefined =>
+  [...roles].sort((left, right) => (rolePriority[right] ?? 0) - (rolePriority[left] ?? 0))[0];
 
 const readBearerToken = (request: Request): string | null => {
   const header = request.header("authorization");
@@ -58,11 +77,39 @@ export const requireAuth = async (req: RequestWithAuth, res: Response, next: Nex
     return unauthorized(res);
   }
 
+  const { data: adminUser, error: adminUserError } = await supabaseAdmin
+    .from("admin_users")
+    .select("id,org_unit_id,email")
+    .eq("auth_user_id", data.user.id)
+    .maybeSingle();
+
+  if (adminUserError) {
+    return forbidden(res, "Failed to resolve admin profile");
+  }
+
+  if (!adminUser) {
+    return forbidden(res, "Admin profile not registered");
+  }
+
+  const { data: roleRows, error: roleError } = await supabaseAdmin
+    .from("user_roles")
+    .select("roles(key)")
+    .eq("user_id", adminUser.id);
+
+  if (roleError) {
+    return forbidden(res, "Failed to resolve roles");
+  }
+
+  const roles = (roleRows ?? [])
+    .map((row: any) => row.roles?.key as string | undefined)
+    .filter((role): role is string => Boolean(role));
+
   req.authUser = {
     authUserId: data.user.id,
-    email: data.user.email ?? "",
-    orgUnitId: "",
-    roleHint: undefined
+    email: adminUser.email ?? data.user.email ?? "",
+    orgUnitId: adminUser.org_unit_id,
+    roleHint: pickHighestRole(roles),
+    roles
   };
 
   return next();

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { supabaseAnon } from "../lib/supabase";
+import { supabaseAdmin, supabaseAnon } from "../lib/supabase";
 import { requireAuth } from "../middleware/auth";
 
 export const authRouter = Router();
@@ -31,6 +31,32 @@ authRouter.post("/login", async (req, res) => {
     });
   }
 
+  const { data: adminUser } = await supabaseAdmin
+    .from("admin_users")
+    .select("id,org_unit_id,email")
+    .eq("auth_user_id", data.user.id)
+    .maybeSingle();
+
+  if (!adminUser) {
+    return res.status(403).json({
+      code: "FORBIDDEN",
+      message: "Admin profile not registered",
+      data: null,
+      requestId: "local"
+    });
+  }
+
+  const { data: roleRows } = await supabaseAdmin
+    .from("user_roles")
+    .select("roles(key)")
+    .eq("user_id", adminUser.id);
+
+  const roleOrder = ["super_admin", "admin", "analyst", "viewer"];
+  const roles = (roleRows ?? [])
+    .map((row: any) => row.roles?.key as string | undefined)
+    .filter((role): role is string => Boolean(role));
+  const role = roleOrder.find((item) => roles.includes(item)) ?? "viewer";
+
   return res.status(200).json({
     code: "OK",
     message: "Logged in",
@@ -40,7 +66,10 @@ authRouter.post("/login", async (req, res) => {
       expiresAt: data.session.expires_at,
       user: {
         id: data.user.id,
-        email: data.user.email
+        email: adminUser.email ?? data.user.email,
+        role,
+        roles,
+        orgUnitId: adminUser.org_unit_id
       }
     },
     requestId: "local"
