@@ -24,20 +24,20 @@ on conflict (key) do nothing;
 
 insert into public.feature_modules (key, name)
 values
-  ('declaration', '项目申报'),
-  ('approval', '项目立项'),
-  ('midterm', '中期检查'),
-  ('tech-report', '技术报告'),
-  ('acceptance', '项目验收'),
-  ('evaluation', '成果评价'),
-  ('integrity', '诚信复议'),
-  ('experts', '专家管理'),
-  ('contracts', '合同管理'),
-  ('fund-adjustment', '经费调整'),
-  ('unit-adjustment', '单位调整'),
-  ('extension', '延期申请'),
-  ('termination', '终止撤销'),
-  ('record', '备案系统')
+  ('declaration', 'Project Declaration'),
+  ('approval', 'Project Approval'),
+  ('midterm', 'Midterm Inspection'),
+  ('tech-report', 'Tech Report'),
+  ('acceptance', 'Project Acceptance'),
+  ('evaluation', 'Achievement Evaluation'),
+  ('integrity', 'Integrity Review'),
+  ('experts', 'Expert Management'),
+  ('contracts', 'Contract Management'),
+  ('fund-adjustment', 'Fund Adjustment'),
+  ('unit-adjustment', 'Unit Adjustment'),
+  ('extension', 'Extension Application'),
+  ('termination', 'Termination Revocation'),
+  ('record', 'Record System')
 on conflict (key) do nothing;
 
 with rp as (
