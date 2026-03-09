@@ -107,7 +107,18 @@ usersRouter.put("/:id/roles", requireAuth, requirePermission("roles.write"), (re
     });
   }
 
-  const updated = usersService.assignRoles(req.params.id, parsed.data.roleKeys);
+  const userIdParam = req.params.id;
+  const userId = Array.isArray(userIdParam) ? userIdParam[0] : userIdParam;
+  if (!userId) {
+    return res.status(422).json({
+      code: "VALIDATION_ERROR",
+      message: "Invalid user id",
+      data: null,
+      requestId: "local"
+    });
+  }
+
+  const updated = usersService.assignRoles(userId, parsed.data.roleKeys);
   if (!updated) {
     return res.status(404).json({
       code: "NOT_FOUND",

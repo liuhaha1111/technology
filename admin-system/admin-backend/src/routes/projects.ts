@@ -22,8 +22,19 @@ projectsRouter.post("/:id/review", requireAuth, requirePermission("modules.revie
     });
   }
 
+  const projectIdParam = req.params.id;
+  const projectId = Array.isArray(projectIdParam) ? projectIdParam[0] : projectIdParam;
+  if (!projectId) {
+    return res.status(422).json({
+      code: "VALIDATION_ERROR",
+      message: "Invalid project id",
+      data: null,
+      requestId: "local"
+    });
+  }
+
   const result = modulesService.reviewProject(
-    req.params.id,
+    projectId,
     (req as RequestWithAuth).authUser?.authUserId ?? "unknown",
     parsed.data.decision,
     parsed.data.comments

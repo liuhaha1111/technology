@@ -35,7 +35,16 @@ modulesRouter.get("/:moduleKey/records", requireAuth, requirePermission("modules
     });
   }
 
-  const moduleKey = req.params.moduleKey;
+  const moduleKeyParam = req.params.moduleKey;
+  const moduleKey = Array.isArray(moduleKeyParam) ? moduleKeyParam[0] : moduleKeyParam;
+  if (!moduleKey) {
+    return res.status(422).json({
+      code: "VALIDATION_ERROR",
+      message: "Invalid module key",
+      data: null,
+      requestId: "local"
+    });
+  }
   const result = modulesService.listRecords(moduleKey, query.data.page, query.data.size, scopedOrg, query.data.status);
 
   return res.status(200).json({
