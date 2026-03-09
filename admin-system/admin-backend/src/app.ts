@@ -1,6 +1,8 @@
 import cors from "cors";
 import express from "express";
+import { analyticsRouter } from "./routes/analytics";
 import { authRouter } from "./routes/auth";
+import { auditsRouter } from "./routes/audits";
 import { healthRouter } from "./routes/health";
 import { modulesRouter } from "./routes/modules";
 import { projectsRouter } from "./routes/projects";
@@ -18,3 +20,5 @@ app.use("/api/v1/users", usersRouter);
 app.use("/api/v1", rolesRouter);
 app.use("/api/v1/modules", modulesRouter);
 app.use("/api/v1/projects", projectsRouter);
+app.use("/api/v1/analytics", analyticsRouter);
+app.use("/api/v1/audits", auditsRouter);
