@@ -2,6 +2,7 @@
 import { FileText } from "lucide-react";
 import { portalApi } from "../lib/api";
 import ProjectDeclarationEditor from "./project-declaration/ProjectDeclarationEditor";
+import { getDeclarationPageView, type DeclarationPageTab } from "./project-declaration/declaration-page.utils";
 import type {
   DeclarationEditorForm,
   DeclarationItem,
@@ -18,7 +19,6 @@ import {
   parseTemplateSnapshot
 } from "./project-declaration/declaration-editor.utils";
 
-type TabKey = "fill" | "mine" | "submit" | "print";
 type TemplateApplyStatus = "open" | "pending" | "ended";
 
 type EditorSession = {
@@ -26,10 +26,10 @@ type EditorSession = {
   declaration: DeclarationItem | null;
   initialForm: DeclarationEditorForm;
   initialStep: number;
-  returnTab: TabKey;
+  returnTab: DeclarationPageTab;
 };
 
-const tabs: Array<{ key: TabKey; label: string }> = [
+const tabs: Array<{ key: DeclarationPageTab; label: string }> = [
   { key: "fill", label: "填报申报书" },
   { key: "mine", label: "我的申报书" },
   { key: "submit", label: "提交申报书" },
@@ -112,7 +112,7 @@ const downloadBase64File = (fileName: string, mimeType: string, fileBase64: stri
 };
 
 export default function ProjectDeclaration() {
-  const [activeTab, setActiveTab] = useState<TabKey>("fill");
+  const [activeTab, setActiveTab] = useState<DeclarationPageTab>("fill");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [templates, setTemplates] = useState<TemplateItem[]>([]);
@@ -128,6 +128,7 @@ export default function ProjectDeclaration() {
   );
   const submitRows = useMemo(() => sortedDeclarations.filter((item) => item.status === "draft"), [sortedDeclarations]);
   const printRows = useMemo(() => sortedDeclarations.filter((item) => item.status !== "draft"), [sortedDeclarations]);
+  const pageView = useMemo(() => getDeclarationPageView(activeTab, Boolean(editorSession)), [activeTab, editorSession]);
 
   const loadData = async () => {
     setLoading(true);
@@ -182,7 +183,7 @@ export default function ProjectDeclaration() {
     });
   };
 
-  const openEdit = (declaration: DeclarationItem, returnTab: TabKey = "mine") => {
+  const openEdit = (declaration: DeclarationItem, returnTab: DeclarationPageTab = "mine") => {
     const template = resolveTemplateForDeclaration(declaration);
     if (!template) {
       setError("当前申报书关联模板不存在，无法继续编辑。");
@@ -354,7 +355,7 @@ export default function ProjectDeclaration() {
     </div>
   );
 
-  const renderDeclarationTable = (rows: DeclarationItem[], mode: TabKey) => (
+  const renderDeclarationTable = (rows: DeclarationItem[], mode: DeclarationPageTab) => (
     <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
       <table className="min-w-full text-sm">
         <thead className="bg-slate-50 text-slate-600"><tr>{["申报标题", "模板", "项目类别", "状态", "更新时间", "操作"].map((label) => <th key={label} className="border-b border-slate-200 px-4 py-3 text-left font-medium">{label}</th>)}</tr></thead>
@@ -389,23 +390,23 @@ export default function ProjectDeclaration() {
   );
 
   return (
-    <div className="space-y-5 p-4 md:p-6">
-      <div className="rounded-2xl border border-orange-200 bg-gradient-to-r from-orange-50 to-white px-4 py-3 text-sm text-slate-600 shadow-sm"><span className="font-medium text-slate-500">当前位置：</span><span className="font-semibold text-slate-900">项目申报</span>{editorSession ? <span className="font-semibold text-blue-700"> / 项目申报系统</span> : null}</div>
+    <div className={pageView.showPageChrome ? "space-y-5 p-4 md:p-6" : "p-4 md:p-6"}>
+      {pageView.showPageChrome ? <div className="rounded-2xl border border-orange-200 bg-gradient-to-r from-orange-50 to-white px-4 py-3 text-sm text-slate-600 shadow-sm"><span className="font-medium text-slate-500">当前位置：</span><span className="font-semibold text-slate-900">项目申报</span></div> : null}
       {error ? <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p> : null}
       {message ? <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</p> : null}
-      <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-2">{tabs.map((tab) => <button key={tab.key} type="button" onClick={() => setActiveTab(tab.key)} className={`rounded-t-xl border px-4 py-2 text-sm ${activeTab === tab.key ? "border-slate-300 bg-slate-100 font-semibold text-slate-900" : "border-transparent bg-white text-slate-500"}`}>{tab.label}</button>)}</div>
-      {editorSession ? (
+      {pageView.showPageChrome ? <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-2">{tabs.map((tab) => <button key={tab.key} type="button" onClick={() => setActiveTab(tab.key)} className={`rounded-t-xl border px-4 py-2 text-sm ${activeTab === tab.key ? "border-slate-300 bg-slate-100 font-semibold text-slate-900" : "border-transparent bg-white text-slate-500"}`}>{tab.label}</button>)}</div> : null}
+      {pageView.showEditor && editorSession ? (
         <ProjectDeclarationEditor template={editorSession.template} initialForm={editorSession.initialForm} initialStep={editorSession.initialStep} saving={saving} editingLabel={editorSession.declaration ? "编辑申报书" : "新建申报书"} onCancel={closeEditor} onSaveDraft={saveDraft} onSubmit={submitEditorDeclaration} />
-      ) : activeTab === "fill" ? (
+      ) : pageView.visibleTab === "fill" ? (
         renderTemplateTable()
-      ) : activeTab === "mine" ? (
+      ) : pageView.visibleTab === "mine" ? (
         renderDeclarationTable(sortedDeclarations, "mine")
-      ) : activeTab === "submit" ? (
+      ) : pageView.visibleTab === "submit" ? (
         renderDeclarationTable(submitRows, "submit")
       ) : (
         renderDeclarationTable(printRows, "print")
       )}
-      {!editorSession && activeTab === "mine" ? <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm text-slate-500 shadow-sm"><div className="flex items-center gap-2"><FileText className="h-4 w-4 text-blue-600" /><span>我的申报书中：草稿可编辑和删除，已提交及后续状态只允许查看 PDF。</span></div></div> : null}
+      {pageView.showMineHint ? <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm text-slate-500 shadow-sm"><div className="flex items-center gap-2"><FileText className="h-4 w-4 text-blue-600" /><span>我的申报书中：草稿可编辑和删除，已提交及后续状态只允许查看 PDF。</span></div></div> : null}
     </div>
   );
 }
