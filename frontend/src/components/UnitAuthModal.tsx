@@ -1,44 +1,251 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { portalApi } from "../lib/api";
+import { setPortalSession } from "../lib/session";
+
+type RegionItem = {
+  code: string;
+  name: string;
+};
+
+type AddressMode = "select" | "manual";
 
 interface UnitAuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  initialMode?: 'login' | 'register';
+  initialMode?: "login" | "register";
 }
 
-export default function UnitAuthModal({ isOpen, onClose, initialMode = 'login' }: UnitAuthModalProps) {
-  const [mode, setMode] = useState<'login' | 'register'>(initialMode);
+export default function UnitAuthModal({ isOpen, onClose, initialMode = "login" }: UnitAuthModalProps) {
+  const [mode, setMode] = useState<"login" | "register">(initialMode);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [captchaId, setCaptchaId] = useState("");
+  const [captchaImage, setCaptchaImage] = useState("");
+  const [captchaCode, setCaptchaCode] = useState("");
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  const [orgName, setOrgName] = useState("");
+  const [socialCreditCode, setSocialCreditCode] = useState("");
+  const [contactName, setContactName] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [address, setAddress] = useState("");
+
+  const [addressMode, setAddressMode] = useState<AddressMode>("select");
+  const [provinceCode, setProvinceCode] = useState("");
+  const [cityCode, setCityCode] = useState("");
+  const [districtCode, setDistrictCode] = useState("");
+  const [manualProvince, setManualProvince] = useState("");
+  const [manualCity, setManualCity] = useState("");
+  const [manualDistrict, setManualDistrict] = useState("");
+
+  const [provinces, setProvinces] = useState<RegionItem[]>([]);
+  const [cities, setCities] = useState<RegionItem[]>([]);
+  const [districts, setDistricts] = useState<RegionItem[]>([]);
+
   const navigate = useNavigate();
+
+  const refreshCaptcha = async () => {
+    try {
+      const res = await portalApi.getCaptcha();
+      setCaptchaId(res.data.captchaId);
+      setCaptchaImage(res.data.imageData);
+      setCaptchaCode("");
+    } catch {
+      setError("验证码获取失败，请重试。");
+    }
+  };
+
+  const loadRegions = async () => {
+    try {
+      const res = await portalApi.getRegions("province");
+      setProvinces((res.data.items ?? []) as RegionItem[]);
+    } catch {
+      setError("地区选项加载失败。");
+    }
+  };
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    setMode(initialMode);
+    setAddressMode("select");
+    setError("");
+    setManualProvince("");
+    setManualCity("");
+    setManualDistrict("");
+    refreshCaptcha();
+    loadRegions();
+  }, [isOpen, initialMode]);
+
+  useEffect(() => {
+    if (addressMode !== "select") {
+      return;
+    }
+
+    if (!provinceCode) {
+      setCities([]);
+      setCityCode("");
+      return;
+    }
+
+    portalApi
+      .getRegions("city", provinceCode)
+      .then((res) => setCities((res.data.items ?? []) as RegionItem[]))
+      .catch(() => setError("城市选项加载失败。"));
+  }, [addressMode, provinceCode]);
+
+  useEffect(() => {
+    if (addressMode !== "select") {
+      return;
+    }
+
+    if (!cityCode) {
+      setDistricts([]);
+      setDistrictCode("");
+      return;
+    }
+
+    portalApi
+      .getRegions("district", cityCode)
+      .then((res) => setDistricts((res.data.items ?? []) as RegionItem[]))
+      .catch(() => setError("区县选项加载失败。"));
+  }, [addressMode, cityCode]);
 
   if (!isOpen) return null;
 
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    navigate('/unit');
+    setError("");
+    setLoading(true);
+    try {
+      const res = await portalApi.loginUnit({
+        email,
+        password,
+        captchaId,
+        captchaCode
+      });
+      const token = res.data.accessToken as string | undefined;
+      if (!token) {
+        throw new Error("缺少登录令牌");
+      }
+      setPortalSession(token, "unit");
+      navigate("/unit");
+      onClose();
+    } catch (err: any) {
+      setError(err?.message ?? "登录失败，请检查账号和密码。");
+      await refreshCaptcha();
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleRegisterSubmit = (e: React.FormEvent) => {
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    navigate('/unit');
+    setError("");
+
+    if (password !== confirmPassword) {
+      setError("两次输入的密码不一致。");
+      return;
+    }
+
+    let finalProvinceCode = "";
+    let finalCityCode = "";
+    let finalDistrictCode = "";
+    let finalProvinceName = "";
+    let finalCityName = "";
+    let finalDistrictName = "";
+
+    if (addressMode === "manual") {
+      const p = manualProvince.trim();
+      const c = manualCity.trim();
+      const d = manualDistrict.trim();
+      if (!p || !c || !d) {
+        setError("请手动填写省、市、区（县）。");
+        return;
+      }
+
+      finalProvinceCode = p;
+      finalCityCode = c;
+      finalDistrictCode = d;
+      finalProvinceName = p;
+      finalCityName = c;
+      finalDistrictName = d;
+    } else {
+      if (!provinceCode || !cityCode || !districtCode) {
+        setError("请选择省、市、区（县）。");
+        return;
+      }
+
+      const selectedProvince = provinces.find((item) => item.code === provinceCode);
+      const selectedCity = cities.find((item) => item.code === cityCode);
+      const selectedDistrict = districts.find((item) => item.code === districtCode);
+
+      finalProvinceCode = provinceCode;
+      finalCityCode = cityCode;
+      finalDistrictCode = districtCode;
+      finalProvinceName = selectedProvince?.name ?? provinceCode;
+      finalCityName = selectedCity?.name ?? cityCode;
+      finalDistrictName = selectedDistrict?.name ?? districtCode;
+    }
+
+    setLoading(true);
+    try {
+      await portalApi.registerOrganization({
+        account: { email, password },
+        organization: {
+          name: orgName,
+          socialCreditCode: socialCreditCode || undefined,
+          contactName,
+          contactPhone,
+          provinceCode: finalProvinceCode,
+          provinceName: finalProvinceName,
+          cityCode: finalCityCode,
+          cityName: finalCityName,
+          districtCode: finalDistrictCode,
+          districtName: finalDistrictName,
+          address
+        },
+        captchaId,
+        captchaCode
+      });
+      setError("注册信息已提交，请等待审核。");
+      setMode("login");
+      await refreshCaptcha();
+    } catch (err: any) {
+      setError(err?.message ?? "单位注册失败，请稍后重试。");
+      await refreshCaptcha();
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className={`bg-white dark:bg-surface-dark rounded-xl shadow-2xl overflow-hidden w-full ${mode === 'register' ? 'max-w-4xl' : 'max-w-md'} max-h-[90vh] flex flex-col transition-all duration-300`}>
-        
-        {/* Header */}
+      <div
+        className={`bg-white dark:bg-surface-dark rounded-xl shadow-2xl overflow-hidden w-full ${
+          mode === "register" ? "max-w-4xl" : "max-w-md"
+        } max-h-[90vh] flex flex-col transition-all duration-300`}
+      >
         <div className="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
           <div className="flex space-x-4">
-            <button 
-              onClick={() => setMode('login')}
-              className={`text-lg font-bold pb-1 border-b-2 transition-colors ${mode === 'login' ? 'border-blue-600 text-blue-600 dark:text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'}`}
+            <button
+              onClick={() => setMode("login")}
+              className={`text-lg font-bold pb-1 border-b-2 transition-colors ${
+                mode === "login" ? "border-blue-600 text-blue-600 dark:text-blue-400" : "border-transparent text-gray-500"
+              }`}
             >
               单位登录
             </button>
-            <button 
-              onClick={() => setMode('register')}
-              className={`text-lg font-bold pb-1 border-b-2 transition-colors ${mode === 'register' ? 'border-blue-600 text-blue-600 dark:text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'}`}
+            <button
+              onClick={() => setMode("register")}
+              className={`text-lg font-bold pb-1 border-b-2 transition-colors ${
+                mode === "register" ? "border-blue-600 text-blue-600 dark:text-blue-400" : "border-transparent text-gray-500"
+              }`}
             >
               单位注册
             </button>
@@ -48,146 +255,281 @@ export default function UnitAuthModal({ isOpen, onClose, initialMode = 'login' }
           </button>
         </div>
 
-        {/* Content */}
         <div className="p-6 overflow-y-auto scrollbar-thin">
-          {mode === 'login' ? (
+          {error ? <p className="text-red-600 text-sm mb-4">{error}</p> : null}
+          {mode === "login" ? (
             <form onSubmit={handleLoginSubmit} className="space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">用户名</label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <span className="material-icons-outlined text-gray-400 text-lg">person</span>
-                  </div>
-                  <input type="text" required placeholder="请输入用户名" className="pl-10 block w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm h-11" />
-                </div>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">密码</label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <span className="material-icons-outlined text-gray-400 text-lg">lock</span>
-                  </div>
-                  <input type="password" required placeholder="请输入密码" className="pl-10 block w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm h-11" />
-                </div>
-              </div>
-              
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                账号邮箱
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  className="mt-2 block w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm h-11 px-3"
+                />
+              </label>
+
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                登录密码
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  className="mt-2 block w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm h-11 px-3"
+                />
+              </label>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">验证码</label>
                 <div className="flex space-x-3">
-                  <div className="relative flex-grow">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                      <span className="material-icons-outlined text-gray-400 text-lg">verified_user</span>
+                  <input
+                    type="text"
+                    required
+                    value={captchaCode}
+                    onChange={(e) => setCaptchaCode(e.target.value)}
+                    placeholder="请输入验证码"
+                    className="flex-1 block rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm h-11 px-3"
+                  />
+                  <button type="button" onClick={refreshCaptcha} className="flex-none" title="点击刷新验证码">
+                    <div className="w-24 h-11 bg-gray-200 rounded border border-gray-300 dark:border-gray-600 flex items-center justify-center overflow-hidden">
+                      {captchaImage ? <img src={captchaImage} alt="captcha" className="w-full h-full object-cover" /> : "..."}
                     </div>
-                    <input type="text" required placeholder="验证码" className="pl-10 block w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm h-11" />
-                  </div>
-                  <div className="flex-none cursor-pointer group relative" title="点击刷新">
-                    <div className="w-24 h-11 bg-gray-200 rounded border border-gray-300 dark:border-gray-600 flex items-center justify-center overflow-hidden" style={{ backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 5px, rgba(0,0,0,0.05) 5px, rgba(0,0,0,0.05) 6px)' }}>
-                      <span className="font-serif text-xl font-bold tracking-widest italic text-gray-700 dark:text-gray-800 transform -rotate-2 select-none">ca36</span>
-                    </div>
-                  </div>
+                  </button>
                 </div>
               </div>
-              
-              <div className="flex items-center justify-between text-sm py-1">
-                <a href="#" className="text-gray-500 hover:text-blue-600 dark:text-gray-400">忘记账号密码?</a>
-              </div>
-              
-              <button type="submit" className="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors">
-                登录系统
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none"
+              >
+                {loading ? "登录中..." : "登录"}
               </button>
             </form>
           ) : (
             <form onSubmit={handleRegisterSubmit} className="space-y-4">
-              <div className="mb-4 pb-2 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2">
-                <h3 className="text-lg font-bold text-gray-800 dark:text-white">单位基本信息</h3>
-              </div>
-
               <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">用户名：</label>
-                <div className="md:col-span-9 flex items-center gap-2">
-                  <input type="text" required className="w-full max-w-[250px] rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500" />
-                  <span className="text-blue-600 font-bold">*</span>
-                  <span className="text-xs text-gray-500">(任意8到16位字母、数字组成,区分大小写、不允许含有空格)</span>
+                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">账号邮箱</label>
+                <div className="md:col-span-9">
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                    className="w-full max-w-[300px] rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500"
+                  />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">密码：</label>
-                <div className="md:col-span-9 flex items-center gap-2">
-                  <input type="password" required className="w-full max-w-[250px] rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500" />
-                  <span className="text-blue-600 font-bold">*</span>
-                  <span className="text-xs text-gray-500">(8-16个数字、字母、特殊符号组成，必须包含一个大写字母和一个特殊符号)</span>
+                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">登录密码</label>
+                <div className="md:col-span-9">
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    className="w-full max-w-[250px] rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500"
+                  />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">确认密码：</label>
-                <div className="md:col-span-5">
-                  <input type="password" required className="w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500" />
+                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">确认密码</label>
+                <div className="md:col-span-9">
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    required
+                    className="w-full max-w-[250px] rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500"
+                  />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">单位名称：</label>
-                <div className="md:col-span-9 flex items-center gap-2">
-                  <input type="text" required className="w-full max-w-[250px] rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500" />
-                  <span className="text-blue-600 font-bold">*</span>
-                  <span className="text-xs text-gray-500">单位名称注册后不可变更（请保持与组织机构代码证一致）</span>
+                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">单位名称</label>
+                <div className="md:col-span-9">
+                  <input
+                    type="text"
+                    value={orgName}
+                    onChange={(e) => setOrgName(e.target.value)}
+                    required
+                    className="w-full max-w-[300px] rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500"
+                  />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">社会信用代码：</label>
-                <div className="md:col-span-5">
-                  <input type="text" className="w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500" />
+                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">统一社会信用代码</label>
+                <div className="md:col-span-9">
+                  <input
+                    type="text"
+                    value={socialCreditCode}
+                    onChange={(e) => setSocialCreditCode(e.target.value)}
+                    className="w-full max-w-[250px] rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500"
+                  />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">所在地区：</label>
-                <div className="md:col-span-9 flex flex-wrap items-center gap-2">
-                  <span className="text-sm">省/直辖市:</span>
-                  <select className="rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500">
-                    <option>吉林</option>
-                  </select>
-                  <span className="text-sm ml-2">市/州:</span>
-                  <select className="rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500">
-                    <option>长春市</option>
-                  </select>
-                  <span className="text-sm ml-2">区/县:</span>
-                  <select className="rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500">
-                    <option>朝阳区</option>
-                  </select>
+                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">联系人</label>
+                <div className="md:col-span-9">
+                  <input
+                    type="text"
+                    value={contactName}
+                    onChange={(e) => setContactName(e.target.value)}
+                    required
+                    className="w-full max-w-[200px] rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500"
+                  />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">验证码：</label>
-                <div className="md:col-span-9 flex items-center gap-3">
-                  <input type="text" required className="w-32 rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500" />
-                  <div className="h-9 w-24 bg-gray-200 flex items-center justify-center rounded overflow-hidden relative">
-                    <span className="font-serif text-lg font-bold tracking-widest text-blue-500 transform -rotate-6">6</span>
-                    <span className="font-serif text-lg font-bold tracking-widest text-yellow-600 transform rotate-12">S</span>
-                    <span className="font-serif text-lg font-bold tracking-widest text-orange-500 transform -rotate-12">F</span>
-                    <span className="font-serif text-lg font-bold tracking-widest text-blue-800 transform rotate-6">F</span>
-                    <div className="absolute inset-0 opacity-20 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0IiBoZWlnaHQ9IjQiPgo8cmVjdCB3aWR0aD0iNCIgaGVpZ2h0PSI0IiBmaWxsPSIjZmZmIj48L3JlY3Q+CjxwYXRoIGQ9Ik0wIDBMNCA0Wk00IDBMMCA0WiIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjEiPjwvcGF0aD4KPC9zdmc+')]"></div>
+                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">联系电话</label>
+                <div className="md:col-span-9">
+                  <input
+                    type="text"
+                    value={contactPhone}
+                    onChange={(e) => setContactPhone(e.target.value)}
+                    required
+                    className="w-full max-w-[200px] rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
+                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300 pt-2">所在地区</label>
+                <div className="md:col-span-9 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAddressMode("select")}
+                      className={`px-3 py-1 rounded border text-sm ${
+                        addressMode === "select" ? "border-blue-500 text-blue-600" : "border-gray-300 text-gray-600"
+                      }`}
+                    >
+                      下拉选择
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAddressMode("manual")}
+                      className={`px-3 py-1 rounded border text-sm ${
+                        addressMode === "manual" ? "border-blue-500 text-blue-600" : "border-gray-300 text-gray-600"
+                      }`}
+                    >
+                      手动填写
+                    </button>
                   </div>
-                  <button type="button" className="text-blue-600 hover:underline text-sm">换一张</button>
+
+                  {addressMode === "select" ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select
+                        value={provinceCode}
+                        onChange={(e) => setProvinceCode(e.target.value)}
+                        className="rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value="">选择省份</option>
+                        {provinces.map((item) => (
+                          <option key={item.code} value={item.code}>
+                            {item.name}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={cityCode}
+                        onChange={(e) => setCityCode(e.target.value)}
+                        className="rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value="">选择城市</option>
+                        {cities.map((item) => (
+                          <option key={item.code} value={item.code}>
+                            {item.name}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={districtCode}
+                        onChange={(e) => setDistrictCode(e.target.value)}
+                        className="rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value="">选择区县</option>
+                        {districts.map((item) => (
+                          <option key={item.code} value={item.code}>
+                            {item.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                      <input
+                        type="text"
+                        value={manualProvince}
+                        onChange={(e) => setManualProvince(e.target.value)}
+                        placeholder="请输入省份"
+                        className="rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500"
+                      />
+                      <input
+                        type="text"
+                        value={manualCity}
+                        onChange={(e) => setManualCity(e.target.value)}
+                        placeholder="请输入城市"
+                        className="rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500"
+                      />
+                      <input
+                        type="text"
+                        value={manualDistrict}
+                        onChange={(e) => setManualDistrict(e.target.value)}
+                        placeholder="请输入区县"
+                        className="rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500"
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
 
-              <div className="flex justify-center pt-4">
-                <label className="inline-flex items-center">
-                  <input type="checkbox" required className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
-                  <span className="ml-2 text-sm text-gray-600 dark:text-gray-300">我已阅读并同意遵守 <a href="#" className="text-blue-600 hover:underline">[隐私政策]</a></span>
-                </label>
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">详细地址</label>
+                <div className="md:col-span-9">
+                  <input
+                    type="text"
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    className="w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+                <label className="md:col-span-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">验证码</label>
+                <div className="md:col-span-9 flex items-center gap-3">
+                  <input
+                    type="text"
+                    value={captchaCode}
+                    onChange={(e) => setCaptchaCode(e.target.value)}
+                    required
+                    className="w-32 rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-blue-500 focus:border-blue-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={refreshCaptcha}
+                    className="h-9 w-24 bg-gray-200 flex items-center justify-center rounded overflow-hidden"
+                  >
+                    {captchaImage ? <img src={captchaImage} alt="captcha" className="w-full h-full object-cover" /> : "..."}
+                  </button>
+                </div>
               </div>
 
               <div className="flex justify-center pt-4 pb-2">
-                <button type="submit" className="bg-gradient-to-b from-blue-50 to-gray-200 border border-gray-400 hover:from-gray-100 hover:to-gray-300 text-gray-800 px-8 py-1.5 rounded shadow-sm flex items-center gap-1 font-medium">
-                  <span className="material-icons-outlined text-blue-600 text-lg">save</span>
-                  保存
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="bg-gradient-to-b from-blue-50 to-gray-200 border border-gray-400 hover:from-gray-100 hover:to-gray-300 text-gray-800 px-8 py-1.5 rounded shadow-sm flex items-center gap-1 font-medium"
+                >
+                  {loading ? "提交中..." : "提交审核"}
                 </button>
               </div>
             </form>

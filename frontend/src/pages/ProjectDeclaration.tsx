@@ -1,398 +1,413 @@
-import { useState } from 'react';
+﻿import { useEffect, useMemo, useState } from "react";
+import { FileText } from "lucide-react";
+import { portalApi } from "../lib/api";
+import ProjectDeclarationEditor from "./project-declaration/ProjectDeclarationEditor";
+import type {
+  DeclarationEditorForm,
+  DeclarationItem,
+  DeclarationStatus,
+  TemplateItem,
+  TemplateSnapshot
+} from "./project-declaration/declaration-editor.types";
+import {
+  buildDeclarationContent,
+  createEmptyDeclarationForm,
+  declarationEditorSteps,
+  getDeclarationActionFlags,
+  parseDeclarationEditorState,
+  parseTemplateSnapshot
+} from "./project-declaration/declaration-editor.utils";
+
+type TabKey = "fill" | "mine" | "submit" | "print";
+type TemplateApplyStatus = "open" | "pending" | "ended";
+
+type EditorSession = {
+  template: TemplateItem;
+  declaration: DeclarationItem | null;
+  initialForm: DeclarationEditorForm;
+  initialStep: number;
+  returnTab: TabKey;
+};
+
+const tabs: Array<{ key: TabKey; label: string }> = [
+  { key: "fill", label: "填报申报书" },
+  { key: "mine", label: "我的申报书" },
+  { key: "submit", label: "提交申报书" },
+  { key: "print", label: "打印申报书" }
+];
+
+const declarationStatusTextMap: Record<DeclarationStatus, string> = {
+  draft: "草稿",
+  submitted: "已提交",
+  accepted: "已通过",
+  rejected: "已退回"
+};
+
+const declarationStatusClassMap: Record<DeclarationStatus, string> = {
+  draft: "text-amber-600",
+  submitted: "text-blue-600",
+  accepted: "text-emerald-600",
+  rejected: "text-rose-600"
+};
+
+const templateStatusClassMap: Record<TemplateApplyStatus, string> = {
+  open: "text-emerald-600",
+  pending: "text-amber-600",
+  ended: "text-rose-600"
+};
+
+const asRecord = (value: unknown): Record<string, unknown> | undefined => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+};
+
+const toText = (value: unknown): string => {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return String(value);
+  }
+  return "";
+};
+
+const formatDateTime = (value: string | undefined) => {
+  if (!value) return "-";
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? value : new Date(parsed).toLocaleString("zh-CN", { hour12: false });
+};
+
+const readCurrentStep = (content: Record<string, unknown> | undefined) => {
+  const meta = asRecord(content?.meta);
+  const currentStep = meta?.currentStep;
+  return typeof currentStep === "number" && currentStep >= 0 ? currentStep : 0;
+};
+
+const toTemplateApplyStatus = (template: TemplateItem): { key: TemplateApplyStatus; text: string } => {
+  const now = Date.now();
+  const startAt = Date.parse(template.startAt);
+  const endAt = Date.parse(template.endAt);
+
+  if (!Number.isNaN(startAt) && now < startAt) return { key: "pending", text: "未开始" };
+  if (!Number.isNaN(endAt) && now > endAt) return { key: "ended", text: "已截止" };
+  return { key: "open", text: "可填报" };
+};
+
+const downloadBase64File = (fileName: string, mimeType: string, fileBase64: string) => {
+  const cleanBase64 = fileBase64.includes(",") ? fileBase64.split(",").pop() ?? "" : fileBase64;
+  const binary = window.atob(cleanBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  const blob = new Blob([bytes], { type: mimeType || "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+};
 
 export default function ProjectDeclaration() {
-  const [activeTab, setActiveTab] = useState('填报申报书');
-  const [activeSubTab, setActiveSubTab] = useState('创新能力建设');
-  const [activeSubCategory, setActiveSubCategory] = useState('科技创新平台建设');
-  const [hoveredTab, setHoveredTab] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<TabKey>("fill");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [templates, setTemplates] = useState<TemplateItem[]>([]);
+  const [declarations, setDeclarations] = useState<DeclarationItem[]>([]);
+  const [editorSession, setEditorSession] = useState<EditorSession | null>(null);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
 
-  const tabs = ['填报申报书', '我的申报书', '提交申报书', '打印申报书'];
-  
-  const subCategories: Record<string, string[]> = {
-    '基础研究': ['吉林省自然科学基金'],
-    '技术研发': ['重点研发'],
-    '成果转化': ['科技成果转化'],
-    '创新能力建设': ['科技创新平台建设', '科技企业创新引导', '科技人才培养', '区域创新体系建设', '科技创新战略研究'],
-    '氢能专项': ['重大科技专项'],
-    '意愿征集': ['科技创新平台建设']
+  const templateMap = useMemo(() => new Map(templates.map((item) => [item.id, item])), [templates]);
+  const sortedDeclarations = useMemo(
+    () => [...declarations].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)),
+    [declarations]
+  );
+  const submitRows = useMemo(() => sortedDeclarations.filter((item) => item.status === "draft"), [sortedDeclarations]);
+  const printRows = useMemo(() => sortedDeclarations.filter((item) => item.status !== "draft"), [sortedDeclarations]);
+
+  const loadData = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [templateRes, declarationRes] = await Promise.all([portalApi.getTemplates(), portalApi.listDeclarations()]);
+      const templateItems = ((((templateRes as any)?.data?.items ?? []) as TemplateItem[]).filter((item) => item.status === "published"));
+      const declarationItems = (((declarationRes as any)?.data?.items ?? []) as DeclarationItem[]);
+      setTemplates(templateItems);
+      setDeclarations(declarationItems);
+    } catch (err: any) {
+      setError(err?.message ?? "加载模板或申报书失败");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const getTableData = () => {
-    if (activeSubTab === '基础研究' && activeSubCategory === '吉林省自然科学基金') {
-      return [
-        { source: '省科技创新专项资金支持方向', plan: '吉林省自然科学基金', project: '青年科学基金项目（A类）', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '省自然科学基金管理办...' },
-        { source: '省科技创新专项资金支持方向', plan: '吉林省自然科学基金', project: '青年科学基金项目（B类）', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '省自然科学基金管理办...' },
-        { source: '中央引导地方科技发展资金支持...', plan: '吉林省自然科学基金', project: '自由探索项目', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '省自然科学基金管理办...' },
-        { source: '中央引导地方科技发展资金支持...', plan: '吉林省自然科学基金', project: '主题引导项目', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '省自然科学基金管理办...' },
-        { source: '省科技创新专项资金支持方向', plan: '吉林省自然科学基金', project: '省企联合基金（恒瑞专项）', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '省自然科学基金管理办...' },
-        { source: '中央引导地方科技发展资金支持...', plan: '吉林省自然科学基金', project: '行业联合基金（气象专项）', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '省自然科学基金管理办...' },
-        { source: '中央引导地方科技发展资金支持...', plan: '吉林省自然科学基金', project: '面上项目（医学科学领域）', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '省自然科学基金管理办...' },
-        { source: '省科技创新专项资金支持方向', plan: '吉林省自然科学基金', project: '面上项目（不含医学科学）', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '基础研究与科研条件处' },
-      ];
-    }
-    if (activeSubTab === '成果转化' && activeSubCategory === '科技成果转化') {
-      return [
-        { source: '省科技创新专项资金支持方向', plan: '科技成果转化', project: '成果转化引导项目（医药健康领域）', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '医药健康科技处' },
-        { source: '省科技创新专项资金支持方向', plan: '科技成果转化', project: '揭榜挂帅（军令状）机制项目', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '科技发展规划处' },
-        { source: '中央引导地方科技发展资金支持...', plan: '科技成果转化', project: '成果转化引导项目（概念验证、中试中心、以演代评）', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '科技成果转化促进处' },
-        { source: '中央引导地方科技发展资金支持...', plan: '科技成果转化', project: '成果转化引导项目（示范区、产学研转化）', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '科技成果转化促进处' },
-        { source: '省科技创新专项资金支持方向', plan: '科技成果转化', project: '技术转移体系建设项目', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '科技成果转化促进处' },
-        { source: '省科技创新专项资金支持方向', plan: '科技成果转化', project: '科技协同创新（先投后股）项目', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '省科技创新研究院' },
-        { source: '中央引导地方科技发展资金支持...', plan: '科技成果转化', project: '院士工作站成果转化项目', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '创新体系与政策法规处' },
-        { source: '省科技创新专项资金支持方向', plan: '科技成果转化', project: '“揭榜挂帅”（成果转化榜单）', start: '2026-01-05 08:30:00', end: '2026-01-23 17:00:00', dept: '科技发展规划处' },
-        { source: '省科技创新专项资金支持方向', plan: '科技成果转化', project: '“揭榜挂帅”（技术需求榜单）', start: '2026-01-05 08:30:00', end: '2026-01-23 17:00:00', dept: '科技发展规划处' },
-      ];
-    }
-    if (activeSubTab === '氢能专项' && activeSubCategory === '重大科技专项') {
-      return [
-        { source: '氢能专项', plan: '重大科技专项', project: '吉林省氢能产业综合研究院科技专项', start: '2025-11-07 09:00:00', end: '2025-11-14 16:00:00', dept: '重大任务与省实验室处' },
-      ];
-    }
-    if (activeSubTab === '意愿征集' && activeSubCategory === '科技创新平台建设') {
-      return [
-        { source: '省科技创新专项资金支持方向', plan: '科技创新平台建设', project: '吉林省科技创新中心建设意愿征集', start: '2026-01-19 09:00:00', end: '2026-02-14 09:00:00', dept: '科技资源统筹处' }
-      ];
-    }
-    if (activeSubTab === '创新能力建设') {
-      if (activeSubCategory === '科技创新平台建设') {
-        return [
-          { source: '省科技创新专项资金支持方向', plan: '科技创新平台建设', project: '省科技创新中心建设意愿征集', start: '2026-01-19 09:00:00', end: '2026-02-14 09:00:00', dept: '科技资源统筹处' }
-        ];
-      }
-      if (activeSubCategory === '科技企业创新引导') {
-        return [
-          { source: '省科技创新专项资金支持方向', plan: '科技企业创新引导', project: '科技型中小微企业“破茧成蝶”专项', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '科技成果转化促进处' },
-          { source: '省科技创新专项资金支持方向', plan: '科技企业创新引导', project: '中国创新创业大赛（吉林赛区）获奖企业项目', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '科技人才处' },
-        ];
-      }
-      if (activeSubCategory === '科技人才培养') {
-        return [
-          { source: '省科技创新专项资金支持方向', plan: '科技人才培养', project: '中青年科技人才（团队）项目（高层次人才培养项目）', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '科技人才处' },
-          { source: '省科技创新专项资金支持方向', plan: '科技人才培养', project: '中青年科技创新人才（团队）培育项目', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '科技人才处' },
-          { source: '省科技创新专项资金支持方向', plan: '科技人才培养', project: '中青年科技创业人才（团队）培育项目', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '科技人才处' },
-          { source: '省科技创新专项资金支持方向', plan: '科技人才培养', project: '青年科技人才培养项目', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '科技人才处' },
-        ];
-      }
-      if (activeSubCategory === '区域创新体系建设') {
-        return [
-          { source: '省科技创新专项资金支持方向', plan: '区域创新体系建设', project: '科技特派员区域创新服务项目', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '农村科技处' },
-          { source: '省科技创新专项资金支持方向', plan: '区域创新体系建设', project: '区域科技创新能力提升项目', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '创新体系与政策法规处' },
-        ];
-      }
-      if (activeSubCategory === '科技创新战略研究') {
-        return [
-          { source: '省科技创新专项资金支持方向', plan: '科技创新战略研究', project: '科技创新战略研究', start: '2025-08-07 17:00:00', end: '2025-08-29 17:00:00', dept: '创新体系与政策法规处' },
-        ];
-      }
-    }
-    return [
-      { source: '省科技创新专项资金支...', plan: '重点研发', project: '高新技术领域（企业关键技术）', start: '2025-08-07 17:0...', end: '2025-08-29 17:0...', dept: '高新技术处（科...' },
-      { source: '省科技创新专项资金支...', plan: '重点研发', project: '高新技术领域（产业关键技术）', start: '2025-08-07 17:0...', end: '2025-08-29 17:0...', dept: '高新技术处（科...' },
-      { source: '省科技创新专项资金支...', plan: '重点研发', project: '现代农业领域（企业关键技术）', start: '2025-08-07 17:0...', end: '2025-08-29 17:0...', dept: '农村科技处' },
-      { source: '省科技创新专项资金支...', plan: '重点研发', project: '现代农业领域（产业关键技术-专项任务）', start: '2025-08-07 17:0...', end: '2025-08-29 17:0...', dept: '农村科技处' },
-      { source: '省科技创新专项资金支...', plan: '重点研发', project: '现代农业领域（产业关键技术）', start: '2025-08-07 17:0...', end: '2025-08-29 17:0...', dept: '农村科技处' },
-      { source: '省科技创新专项资金支...', plan: '重点研发', project: '社会发展领域（企业关键技术）', start: '2025-08-07 17:0...', end: '2025-08-29 17:0...', dept: '社会发展科技处' },
-      { source: '省科技创新专项资金支...', plan: '重点研发', project: '社会发展领域（产业关键技术）', start: '2025-08-07 17:0...', end: '2025-08-29 17:0...', dept: '社会发展科技处' },
-      { source: '省科技创新专项资金支...', plan: '重点研发', project: '医药健康领域（企业关键技术）', start: '2025-08-07 17:0...', end: '2025-08-29 17:0...', dept: '医药健康科技处' },
-      { source: '省科技创新专项资金支...', plan: '重点研发', project: '医药健康领域（产业关键技术）', start: '2025-08-07 17:0...', end: '2025-08-29 17:0...', dept: '医药健康科技处' },
-      { source: '省科技创新专项资金支...', plan: '重点研发', project: '国际科技合作', start: '2025-08-07 17:0...', end: '2025-08-29 17:0...', dept: '国际合作处' },
-      { source: '省科技创新专项资金支...', plan: '重点研发', project: '科技资源开发', start: '2025-08-07 17:0...', end: '2025-08-29 17:0...', dept: '科技资源统筹处' },
-    ];
+  useEffect(() => {
+    void loadData();
+  }, []);
+
+  const resolveTemplateForDeclaration = (declaration: DeclarationItem): TemplateItem | null => {
+    const current = templateMap.get(declaration.templateId);
+    if (current) return current;
+    const snapshot: TemplateSnapshot | undefined = parseTemplateSnapshot(declaration.content);
+    if (!snapshot) return null;
+    return {
+      id: snapshot.templateId || declaration.templateId,
+      title: snapshot.title || declaration.title,
+      planCategory: snapshot.planCategory || "-",
+      projectCategory: snapshot.projectCategory || "-",
+      sourceName: snapshot.sourceName,
+      guideUnit: snapshot.guideUnit,
+      contactPhone: snapshot.contactPhone,
+      startAt: snapshot.startAt || declaration.createdAt,
+      endAt: snapshot.endAt || declaration.updatedAt,
+      fileUrl: snapshot.fileUrl,
+      status: "published"
+    };
   };
 
-  const tableData = getTableData();
+  const openCreate = (template: TemplateItem) => {
+    setError("");
+    setMessage("");
+    setActiveTab("fill");
+    setEditorSession({
+      template,
+      declaration: null,
+      initialForm: createEmptyDeclarationForm(template.contactPhone ?? "", template.projectCategory),
+      initialStep: 0,
+      returnTab: "fill"
+    });
+  };
+
+  const openEdit = (declaration: DeclarationItem, returnTab: TabKey = "mine") => {
+    const template = resolveTemplateForDeclaration(declaration);
+    if (!template) {
+      setError("当前申报书关联模板不存在，无法继续编辑。");
+      return;
+    }
+    setError("");
+    setMessage("");
+    setActiveTab(returnTab);
+    setEditorSession({
+      template,
+      declaration,
+      initialForm: parseDeclarationEditorState(declaration.content, template),
+      initialStep: readCurrentStep(declaration.content),
+      returnTab
+    });
+  };
+
+  const closeEditor = () => {
+    if (editorSession) {
+      setActiveTab(editorSession.returnTab);
+    }
+    setEditorSession(null);
+  };
+
+  const saveDraft = async (form: DeclarationEditorForm, currentStep: number) => {
+    if (!editorSession) return;
+    const title = form.basicInfo.projectName.trim();
+    if (!title) {
+      setError("请填写项目名称后再保存。");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const content = buildDeclarationContent(editorSession.template, form, currentStep);
+      if (editorSession.declaration) {
+        await portalApi.updateDeclaration(editorSession.declaration.id, { title, content });
+      } else {
+        await portalApi.createDeclaration({ templateId: editorSession.template.id, title, content });
+      }
+      setMessage("草稿已保存。");
+      closeEditor();
+      setActiveTab("mine");
+      await loadData();
+    } catch (err: any) {
+      setError(err?.message ?? "草稿保存失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const submitEditorDeclaration = async (form: DeclarationEditorForm) => {
+    if (!editorSession) return;
+    const title = form.basicInfo.projectName.trim();
+    if (!title) {
+      setError("请填写项目名称后再提交。");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const content = buildDeclarationContent(editorSession.template, form, declarationEditorSteps.length - 1);
+      if (editorSession.declaration) {
+        await portalApi.updateDeclaration(editorSession.declaration.id, { title, status: "submitted", content });
+      } else {
+        const createRes = (await portalApi.createDeclaration({ templateId: editorSession.template.id, title, content })) as any;
+        const declarationId = toText(createRes?.data?.id);
+        if (!declarationId) throw new Error("创建申报书失败");
+        await portalApi.updateDeclaration(declarationId, { title, status: "submitted", content });
+      }
+      setMessage("申报书已提交并可生成 PDF。");
+      closeEditor();
+      setActiveTab("mine");
+      await loadData();
+    } catch (err: any) {
+      setError(err?.message ?? "提交申报书失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+  const submitDeclaration = async (declaration: DeclarationItem) => {
+    setError("");
+    setMessage("");
+    try {
+      await portalApi.updateDeclaration(declaration.id, { title: declaration.title, status: "submitted", content: declaration.content });
+      setMessage("申报书已提交。");
+      await loadData();
+    } catch (err: any) {
+      setError(err?.message ?? "提交申报书失败");
+    }
+  };
+
+  const removeDeclaration = async (id: string) => {
+    setError("");
+    setMessage("");
+    try {
+      await portalApi.deleteDeclaration(id);
+      setMessage("草稿已删除。");
+      await loadData();
+    } catch (err: any) {
+      setError(err?.message ?? "删除申报书失败");
+    }
+  };
+
+  const downloadTemplate = (template: TemplateItem) => {
+    if (!template.fileUrl) {
+      setError("该模板未上传附件。");
+      return;
+    }
+    window.open(template.fileUrl, "_blank", "noopener,noreferrer");
+  };
+
+  const downloadDeclaration = async (declarationId: string) => {
+    setError("");
+    setMessage("");
+    try {
+      const res = await portalApi.downloadDeclaration(declarationId);
+      const data = asRecord((res as any)?.data);
+      if (!data) throw new Error("下载数据缺失");
+      const fileName = toText(data.fileName) || `declaration-${declarationId}.pdf`;
+      const mimeType = toText(data.mimeType) || "application/pdf";
+      const fileBase64 = toText(data.fileBase64);
+      if (!fileBase64) throw new Error("下载文件为空");
+      downloadBase64File(fileName, mimeType, fileBase64);
+    } catch (err: any) {
+      setError(err?.message ?? "查看 PDF 失败");
+    }
+  };
+
+  const renderTemplateTable = () => (
+    <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <table className="min-w-full text-sm">
+        <thead className="bg-slate-50 text-slate-600">
+          <tr>
+            {["计划类别", "项目类别", "模板标题", "填报时间", "管理单位", "联系电话", "状态", "操作"].map((label) => (
+              <th key={label} className="border-b border-slate-200 px-4 py-3 text-left font-medium">{label}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {templates.length === 0 ? (
+            <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-400">{loading ? "加载中..." : "暂无已发布模板"}</td></tr>
+          ) : (
+            templates.map((template) => {
+              const applyStatus = toTemplateApplyStatus(template);
+              return (
+                <tr key={template.id} className="hover:bg-slate-50">
+                  <td className="border-b border-slate-100 px-4 py-3">{template.planCategory}</td>
+                  <td className="border-b border-slate-100 px-4 py-3">{template.projectCategory}</td>
+                  <td className="border-b border-slate-100 px-4 py-3">{template.title}</td>
+                  <td className="border-b border-slate-100 px-4 py-3 text-slate-500">{formatDateTime(template.startAt)} ~ {formatDateTime(template.endAt)}</td>
+                  <td className="border-b border-slate-100 px-4 py-3">{template.guideUnit || "-"}</td>
+                  <td className="border-b border-slate-100 px-4 py-3">{template.contactPhone || "-"}</td>
+                  <td className={`border-b border-slate-100 px-4 py-3 font-medium ${templateStatusClassMap[applyStatus.key]}`}>{applyStatus.text}</td>
+                  <td className="border-b border-slate-100 px-4 py-3">
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700" onClick={() => downloadTemplate(template)} disabled={!template.fileUrl}>下载模板</button>
+                      <button type="button" className="rounded-lg border border-blue-500 px-3 py-1.5 text-xs font-medium text-blue-700 disabled:opacity-50" onClick={() => openCreate(template)} disabled={applyStatus.key !== "open"}>填报</button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const renderDeclarationTable = (rows: DeclarationItem[], mode: TabKey) => (
+    <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <table className="min-w-full text-sm">
+        <thead className="bg-slate-50 text-slate-600"><tr>{["申报标题", "模板", "项目类别", "状态", "更新时间", "操作"].map((label) => <th key={label} className="border-b border-slate-200 px-4 py-3 text-left font-medium">{label}</th>)}</tr></thead>
+        <tbody>
+          {rows.length === 0 ? <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-400">暂无数据</td></tr> : rows.map((item) => {
+            const template = templateMap.get(item.templateId);
+            const snapshot = parseTemplateSnapshot(item.content);
+            const templateTitle = template?.title || snapshot?.title || "-";
+            const category = template?.projectCategory || snapshot?.projectCategory || "-";
+            const actions = getDeclarationActionFlags(item.status);
+            return (
+              <tr key={item.id} className="hover:bg-slate-50">
+                <td className="border-b border-slate-100 px-4 py-3">{item.title}</td>
+                <td className="border-b border-slate-100 px-4 py-3">{templateTitle}</td>
+                <td className="border-b border-slate-100 px-4 py-3">{category}</td>
+                <td className={`border-b border-slate-100 px-4 py-3 font-medium ${declarationStatusClassMap[item.status]}`}>{declarationStatusTextMap[item.status]}</td>
+                <td className="border-b border-slate-100 px-4 py-3 text-slate-500">{formatDateTime(item.updatedAt)}</td>
+                <td className="border-b border-slate-100 px-4 py-3"><div className="flex flex-wrap gap-2">
+                  {mode === "mine" && actions.canEdit ? <button type="button" className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700" onClick={() => openEdit(item, "mine")}>编辑</button> : null}
+                  {mode === "mine" && actions.canDelete ? <button type="button" className="rounded-lg border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-600" onClick={() => removeDeclaration(item.id)}>删除</button> : null}
+                  {mode === "mine" && actions.canViewPdf ? <button type="button" className="rounded-lg border border-blue-500 px-3 py-1.5 text-xs font-medium text-blue-700" onClick={() => downloadDeclaration(item.id)}>查看PDF</button> : null}
+                  {mode === "submit" && item.status === "draft" ? <button type="button" className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700" onClick={() => openEdit(item, "submit")}>编辑</button> : null}
+                  {mode === "submit" && item.status === "draft" ? <button type="button" className="rounded-lg border border-blue-500 px-3 py-1.5 text-xs font-medium text-blue-700" onClick={() => submitDeclaration(item)}>提交审核</button> : null}
+                  {mode === "print" ? <button type="button" className="rounded-lg border border-blue-500 px-3 py-1.5 text-xs font-medium text-blue-700" onClick={() => downloadDeclaration(item.id)}>查看PDF</button> : null}
+                </div></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 
   return (
-    <div className="p-4">
-      <div className="bg-gradient-to-r from-blue-50 to-white dark:from-gray-800 dark:to-gray-800 border-l-4 border-orange-400 p-2 mb-4 flex items-center text-sm shadow-sm rounded-r">
-        <span className="material-icons-outlined text-orange-500 mr-2 text-lg">volume_up</span>
-        <span className="text-muted-light dark:text-muted-dark mr-1">您当前的位置:</span>
-        <span className="font-bold text-gray-800 dark:text-white">项目申报</span>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        {/* 指南查看 */}
-        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-sm">
-          <div className="flex justify-between items-center p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
-            <div className="flex items-center text-blue-600 dark:text-blue-400 font-medium">
-              <span className="material-icons-outlined mr-2 text-lg">description</span>
-              指南查看
-            </div>
-            <a href="#" className="text-gray-500 hover:text-blue-600 text-sm">更多》</a>
-          </div>
-          <div className="p-3">
-            <ul className="space-y-3 text-sm">
-              <li className="flex justify-between items-center group cursor-pointer">
-                <span className="text-gray-700 dark:text-gray-300 group-hover:text-blue-600 truncate pr-4">· 吉林省科技发展计划2026年度项目指南</span>
-                <span className="text-gray-500 whitespace-nowrap">2025-08-01</span>
-              </li>
-            </ul>
-          </div>
-        </div>
-
-        {/* 通知公告 */}
-        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-sm">
-          <div className="flex justify-between items-center p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
-            <div className="flex items-center text-blue-600 dark:text-blue-400 font-medium">
-              <span className="material-icons-outlined mr-2 text-lg">campaign</span>
-              通知公告
-            </div>
-            <a href="#" className="text-gray-500 hover:text-blue-600 text-sm">更多》</a>
-          </div>
-          <div className="p-3">
-            <ul className="space-y-3 text-sm">
-              <li className="flex justify-between items-center group cursor-pointer">
-                <span className="text-gray-700 dark:text-gray-300 group-hover:text-blue-600 truncate pr-4">· 关于发布《吉林省科技发展计划2026年度项目指南》的通知</span>
-                <span className="text-gray-500 whitespace-nowrap">2025-08-01</span>
-              </li>
-              <li className="flex justify-between items-center group cursor-pointer">
-                <span className="text-gray-700 dark:text-gray-300 group-hover:text-blue-600 truncate pr-4">· 关于发布吉林省科技发展计划项目立项和吉林省科技创新专项资...</span>
-                <span className="text-gray-500 whitespace-nowrap">2024-04-22</span>
-              </li>
-              <li className="flex justify-between items-center group cursor-pointer">
-                <span className="text-gray-700 dark:text-gray-300 group-hover:text-blue-600 truncate pr-4">· 关于对2024年度吉林省科技发展计划拟支持项目（吉林省科技...</span>
-                <span className="text-gray-500 whitespace-nowrap">2023-11-20</span>
-              </li>
-              <li className="flex justify-between items-center group cursor-pointer">
-                <span className="text-gray-700 dark:text-gray-300 group-hover:text-blue-600 truncate pr-4">· 关于发布省科技发展计划“吉林省生物药和高端医疗器械产业重...</span>
-                <span className="text-gray-500 whitespace-nowrap">2023-10-16</span>
-              </li>
-              <li className="flex justify-between items-center group cursor-pointer">
-                <span className="text-gray-700 dark:text-gray-300 group-hover:text-blue-600 truncate pr-4">· 关于发布《吉林省科技专家库管理办法》的通知</span>
-                <span className="text-gray-500 whitespace-nowrap">2023-06-09</span>
-              </li>
-              <li className="flex justify-between items-center group cursor-pointer">
-                <span className="text-gray-700 dark:text-gray-300 group-hover:text-blue-600 truncate pr-4">· 关于修订发布《吉林省科技发展计划项目管理办法》的通知</span>
-                <span className="text-gray-500 whitespace-nowrap">2023-06-09</span>
-              </li>
-            </ul>
-          </div>
-        </div>
-
-        {/* 系统消息 */}
-        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-sm">
-          <div className="flex justify-between items-center p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
-            <div className="flex items-center text-blue-600 dark:text-blue-400 font-medium">
-              <span className="material-icons-outlined mr-2 text-lg">mail_outline</span>
-              系统消息
-            </div>
-            <a href="#" className="text-gray-500 hover:text-blue-600 text-sm">更多》</a>
-          </div>
-          <div className="p-3">
-            <ul className="space-y-3 text-sm">
-              <li className="flex justify-between items-center group cursor-pointer">
-                <span className="text-gray-700 dark:text-gray-300 group-hover:text-blue-600 truncate pr-4">· 签订任务书审核提示</span>
-                <span className="text-gray-500 whitespace-nowrap">2025.12.27</span>
-              </li>
-              <li className="flex justify-between items-center group cursor-pointer">
-                <span className="text-gray-700 dark:text-gray-300 group-hover:text-blue-600 truncate pr-4">· 项目申报推荐提示</span>
-                <span className="text-gray-500 whitespace-nowrap">2025.08.28</span>
-              </li>
-              <li className="flex justify-between items-center group cursor-pointer">
-                <span className="text-gray-700 dark:text-gray-300 group-hover:text-blue-600 truncate pr-4">· 项目申报推荐提示</span>
-                <span className="text-gray-500 whitespace-nowrap">2025.08.27</span>
-              </li>
-              <li className="flex justify-between items-center group cursor-pointer">
-                <span className="text-gray-700 dark:text-gray-300 group-hover:text-blue-600 truncate pr-4">· 项目申报推荐提示</span>
-                <span className="text-gray-500 whitespace-nowrap">2025.08.27</span>
-              </li>
-              <li className="flex justify-between items-center group cursor-pointer">
-                <span className="text-gray-700 dark:text-gray-300 group-hover:text-blue-600 truncate pr-4">· 验收备案归档完成提示</span>
-                <span className="text-gray-500 whitespace-nowrap">2025.08.21</span>
-              </li>
-              <li className="flex justify-between items-center group cursor-pointer">
-                <span className="text-gray-700 dark:text-gray-300 group-hover:text-blue-600 truncate pr-4">· 验收证书会后完善情况单位审核提示</span>
-                <span className="text-gray-500 whitespace-nowrap">2025.07.14</span>
-              </li>
-            </ul>
-          </div>
-        </div>
-      </div>
-
-      <div className="mb-4">
-        <div className="flex space-x-1 border-b border-gray-300 dark:border-gray-700">
-          {tabs.map(tab => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-6 py-2 font-medium rounded-t transition shadow-sm border-t border-l border-r ${
-                activeTab === tab
-                  ? 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 font-bold border-gray-300 dark:border-gray-600'
-                  : 'bg-surface-light dark:bg-surface-dark text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 border-transparent border-b-gray-300 dark:border-b-gray-700'
-              }`}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
-        {activeTab === '填报申报书' && (
-          <div className="bg-blue-50 dark:bg-gray-800 p-2 border-b border-blue-200 dark:border-gray-700 flex space-x-6 text-sm relative">
-            {Object.keys(subCategories).map(tab => (
-              <div
-                key={tab}
-                className="relative group"
-                onMouseEnter={() => setHoveredTab(tab)}
-                onMouseLeave={() => setHoveredTab(null)}
-              >
-                <button
-                  onClick={() => {
-                    setActiveSubTab(tab);
-                    setActiveSubCategory(subCategories[tab][0]);
-                  }}
-                  className={`pb-1 ${
-                    activeSubTab === tab
-                      ? 'font-bold text-blue-700 dark:text-blue-400 border-b-2 border-blue-600'
-                      : 'text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400'
-                  }`}
-                >
-                  {tab}
-                </button>
-                
-                {/* Dropdown */}
-                {hoveredTab === tab && subCategories[tab].length > 0 && (
-                  <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 w-48 bg-white dark:bg-gray-800 shadow-lg border border-gray-200 dark:border-gray-700 rounded z-10 py-1">
-                    {subCategories[tab].map(subCat => (
-                      <button
-                        key={subCat}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setActiveSubTab(tab);
-                          setActiveSubCategory(subCat);
-                          setHoveredTab(null);
-                        }}
-                        className={`block w-full text-center px-4 py-2 text-sm hover:bg-blue-50 dark:hover:bg-gray-700 transition ${
-                          activeSubCategory === subCat && activeSubTab === tab ? 'text-blue-600 bg-blue-50 dark:bg-gray-700' : 'text-gray-700 dark:text-gray-300'
-                        }`}
-                      >
-                        {subCat}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {activeTab === '填报申报书' && (
-        <div className="bg-surface-light dark:bg-surface-dark rounded shadow overflow-x-auto border border-border-light dark:border-border-dark">
-          <table className="w-full text-sm text-center">
-            <thead className="bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold border-b border-border-light dark:border-border-dark">
-              <tr>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">资金来源</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">计划类别</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">项目类别</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">模板</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">申报开始时间</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">申报截止时间</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">管理单位</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">联系电话</th>
-                <th className="py-3 px-4">操作</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-              {tableData.map((row, idx) => (
-                <tr key={idx} className="hover:bg-blue-50 dark:hover:bg-gray-800 transition">
-                  <td className="py-3 px-4 text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">{row.source}</td>
-                  <td className="py-3 px-4 text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">{row.plan}</td>
-                  <td className="py-3 px-4 text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">{row.project}</td>
-                  <td className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">
-                    <span className="material-icons-outlined text-gray-400 hover:text-blue-600 cursor-pointer text-lg">download</span>
-                  </td>
-                  <td className="py-3 px-4 text-gray-600 dark:text-gray-400 border-r border-gray-200 dark:border-gray-700">{row.start}</td>
-                  <td className="py-3 px-4 text-gray-600 dark:text-gray-400 border-r border-gray-200 dark:border-gray-700">{row.end}</td>
-                  <td className="py-3 px-4 text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">{row.dept}</td>
-                  <td className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">
-                    <span className="material-icons-outlined text-gray-400 hover:text-blue-600 cursor-pointer text-lg">search</span>
-                  </td>
-                  <td className="py-3 px-4 text-red-500 font-medium">未开启</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+    <div className="space-y-5 p-4 md:p-6">
+      <div className="rounded-2xl border border-orange-200 bg-gradient-to-r from-orange-50 to-white px-4 py-3 text-sm text-slate-600 shadow-sm"><span className="font-medium text-slate-500">当前位置：</span><span className="font-semibold text-slate-900">项目申报</span>{editorSession ? <span className="font-semibold text-blue-700"> / 项目申报系统</span> : null}</div>
+      {error ? <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p> : null}
+      {message ? <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</p> : null}
+      <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-2">{tabs.map((tab) => <button key={tab.key} type="button" onClick={() => setActiveTab(tab.key)} className={`rounded-t-xl border px-4 py-2 text-sm ${activeTab === tab.key ? "border-slate-300 bg-slate-100 font-semibold text-slate-900" : "border-transparent bg-white text-slate-500"}`}>{tab.label}</button>)}</div>
+      {editorSession ? (
+        <ProjectDeclarationEditor template={editorSession.template} initialForm={editorSession.initialForm} initialStep={editorSession.initialStep} saving={saving} editingLabel={editorSession.declaration ? "编辑申报书" : "新建申报书"} onCancel={closeEditor} onSaveDraft={saveDraft} onSubmit={submitEditorDeclaration} />
+      ) : activeTab === "fill" ? (
+        renderTemplateTable()
+      ) : activeTab === "mine" ? (
+        renderDeclarationTable(sortedDeclarations, "mine")
+      ) : activeTab === "submit" ? (
+        renderDeclarationTable(submitRows, "submit")
+      ) : (
+        renderDeclarationTable(printRows, "print")
       )}
-
-      {activeTab === '我的申报书' && (
-        <div className="bg-surface-light dark:bg-surface-dark rounded shadow overflow-x-auto border border-border-light dark:border-border-dark mt-4">
-          <table className="w-full text-sm text-center">
-            <thead className="bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold border-b border-border-light dark:border-border-dark">
-              <tr>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">序号</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">条码号</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">年度</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">项目名称</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">项目类别</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">项目负责人</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">承担单位</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">联系电话</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">项目状态</th>
-                <th className="py-3 px-4">操作</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-              {[
-                { id: 1, barcode: '252805XM0105137195', year: '2026', name: '激光共聚焦显微镜设备功...', category: '科技资源开发', leader: '张昕', unit: '长春理工大学', phone: '15904318543', status: '已受理', statusColor: 'text-green-600' },
-                { id: 2, barcode: '192477JC010158867', year: '2020', name: '基于位置服务发现的新能...', category: '自然科学基金（吉林省重点...', leader: '张昕', unit: '长春理工大学', phone: '15904318543', status: '已受理', statusColor: 'text-green-600' },
-                { id: 3, barcode: '182447SF010153900', year: '2019', name: '面向城市精细化治理的智...', category: '社会发展', leader: '张昕', unit: '长春理工大学', phone: '15904318543', status: '已受理', statusColor: 'text-green-600' },
-                { id: 4, barcode: '172421GG037141', year: '2018', name: '吉林省农业物联网科技协...', category: '科技创新中心（工程技术研...', leader: '蒋振刚', unit: '长春理工大学', phone: '15904318543', status: '正在填报', statusColor: 'text-red-500' },
-                { id: 5, barcode: '140402GH010015954', year: '2015', name: '具有长服务周期的工业复...', category: '国际科技合作项目', leader: '张昕', unit: '长春理工大学', phone: '', status: '已受理', statusColor: 'text-green-600' },
-              ].map((row) => (
-                <tr key={row.id} className="hover:bg-blue-50 dark:hover:bg-gray-800 transition">
-                  <td className="py-3 px-4 text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">{row.id}</td>
-                  <td className="py-3 px-4 text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">{row.barcode}</td>
-                  <td className="py-3 px-4 text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">{row.year}</td>
-                  <td className="py-3 px-4 text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">{row.name}</td>
-                  <td className="py-3 px-4 text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">{row.category}</td>
-                  <td className="py-3 px-4 text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">{row.leader}</td>
-                  <td className="py-3 px-4 text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">{row.unit}</td>
-                  <td className="py-3 px-4 text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">{row.phone}</td>
-                  <td className={`py-3 px-4 font-medium border-r border-gray-200 dark:border-gray-700 ${row.statusColor}`}>{row.status}</td>
-                  <td className="py-3 px-4 flex justify-center space-x-2">
-                    {row.status === '正在填报' ? (
-                      <>
-                        <span className="material-icons-outlined text-gray-400 hover:text-blue-600 cursor-pointer text-lg" title="编辑">edit</span>
-                        <span className="material-icons-outlined text-gray-400 hover:text-blue-600 cursor-pointer text-lg" title="查看">find_in_page</span>
-                        <span className="material-icons-outlined text-gray-400 hover:text-red-600 cursor-pointer text-lg" title="删除">delete</span>
-                      </>
-                    ) : (
-                      <span className="material-icons-outlined text-gray-400 hover:text-blue-600 cursor-pointer text-lg" title="下载">download</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {(activeTab === '提交申报书' || activeTab === '打印申报书') && (
-        <div className="bg-surface-light dark:bg-surface-dark rounded shadow overflow-x-auto border border-border-light dark:border-border-dark mt-4">
-          <table className="w-full text-sm text-center">
-            <thead className="bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold border-b border-border-light dark:border-border-dark">
-              <tr>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">序号</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">条码号</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">年度</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">项目名称</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">项目类别</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">项目负责人</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">承担单位</th>
-                <th className="py-3 px-4 border-r border-gray-200 dark:border-gray-700">联系电话</th>
-                <th className="py-3 px-4">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td colSpan={9} className="py-8 text-gray-500 dark:text-gray-400 bg-blue-50/30 dark:bg-gray-800/30">
-                  没有满足条件数据
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      )}
+      {!editorSession && activeTab === "mine" ? <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm text-slate-500 shadow-sm"><div className="flex items-center gap-2"><FileText className="h-4 w-4 text-blue-600" /><span>我的申报书中：草稿可编辑和删除，已提交及后续状态只允许查看 PDF。</span></div></div> : null}
     </div>
   );
 }
+
+

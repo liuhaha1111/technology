@@ -1,4 +1,5 @@
-import { Link } from 'react-router-dom';
+import { Link } from "react-router-dom";
+import { clearPortalSession } from "../lib/session";
 
 export default function Header() {
   return (
@@ -19,7 +20,11 @@ export default function Header() {
             <span className="material-icons-outlined text-pink-300 mr-2 text-xl">feedback</span>
             <span className="font-medium text-sm">意见建议反馈专栏</span>
           </button>
-          <Link to="/" className="bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded flex items-center shadow-sm text-sm">
+          <Link
+            to="/"
+            onClick={() => clearPortalSession()}
+            className="bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded flex items-center shadow-sm text-sm"
+          >
             <span className="material-icons-outlined text-base mr-1">logout</span>
             退出
           </Link>
