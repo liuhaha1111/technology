@@ -17,17 +17,31 @@ import TerminationRevocation from './pages/TerminationRevocation';
 import RecordSystem from './pages/RecordSystem';
 import AchievementEvaluation from './pages/AchievementEvaluation';
 import IntegrityReview from './pages/IntegrityReview';
-import Login from './pages/Login';
 import UnitDashboard from './pages/UnitDashboard';
+import RequirePortalAuth from './components/RequirePortalAuth';
 
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<PublicHome />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/unit" element={<UnitDashboard />} />
-        <Route path="/app" element={<Layout />}>
+        <Route path="/login" element={<Navigate to="/" replace />} />
+        <Route
+          path="/unit"
+          element={(
+            <RequirePortalAuth>
+              <UnitDashboard />
+            </RequirePortalAuth>
+          )}
+        />
+        <Route
+          path="/app"
+          element={(
+            <RequirePortalAuth>
+              <Layout />
+            </RequirePortalAuth>
+          )}
+        >
           <Route index element={<Dashboard />} />
           <Route path="declaration" element={<ProjectDeclaration />} />
           <Route path="approval" element={<ProjectApproval />} />

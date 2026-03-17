@@ -1,4 +1,4 @@
-import request from "supertest";
+锘縤mport request from "supertest";
 import { describe, expect, it } from "vitest";
 import { app } from "../src/app";
 
@@ -57,6 +57,7 @@ describe("Management flow APIs", () => {
     expect(reviewRes.status).toBe(200);
     expect(reviewRes.body.data.status).toBe("approved");
   });
+
   it("rejects re-review after organization already reviewed", async () => {
     const captcha = await request(app).get("/api/v1/captcha");
     const code = captcha.body.data.code;
@@ -98,6 +99,7 @@ describe("Management flow APIs", () => {
     expect(secondReview.status).toBe(409);
     expect(secondReview.body.code).toBe("INVALID_STATE");
   });
+
   it("blocks unit login when organization is pending", async () => {
     const registerCaptcha = await request(app).get("/api/v1/captcha");
     const email = "unit-pending-login@example.com";
@@ -177,11 +179,11 @@ describe("Management flow APIs", () => {
       .post("/api/v1/admin/templates")
       .set("Authorization", "Bearer fake-admin")
       .send({
-        planCategory: "基础研究",
-        projectCategory: "青年基金",
-        title: "2026 基础研究申报书",
-        sourceName: "省科技专项",
-        guideUnit: "省基金办",
+        planCategory: "Basic Research",
+        projectCategory: "Youth Fund",
+        title: "2026 Basic Research Declaration",
+        sourceName: "Provincial Program",
+        guideUnit: "Fund Office",
         contactPhone: "0431-12345678",
         startAt: "2026-03-01T00:00:00.000Z",
         endAt: "2026-04-01T00:00:00.000Z",
@@ -197,7 +199,7 @@ describe("Management flow APIs", () => {
     expect(publishRes.status).toBe(200);
     expect(publishRes.body.data.status).toBe("published");
 
-    const publicRes = await request(app).get("/api/v1/public/templates?planCategory=基础研究");
+    const publicRes = await request(app).get("/api/v1/public/templates?planCategory=Basic%20Research");
     expect(publicRes.status).toBe(200);
     expect(publicRes.body.data.items.length).toBeGreaterThan(0);
   });
@@ -208,7 +210,7 @@ describe("Management flow APIs", () => {
       .set("Authorization", "Bearer portal-fake-principal")
       .send({
         templateId: "tpl-001",
-        title: "我的申报书",
+        title: "My Declaration",
         content: { summary: "demo" }
       });
 
@@ -224,19 +226,49 @@ describe("Management flow APIs", () => {
     const updateRes = await request(app)
       .put(`/api/v1/public/declarations/${declarationId}`)
       .set("Authorization", "Bearer portal-fake-principal")
-      .send({ title: "更新标题" });
+      .send({ title: "Updated Title" });
     expect(updateRes.status).toBe(200);
 
     const downloadRes = await request(app)
       .get(`/api/v1/public/declarations/${declarationId}/download`)
       .set("Authorization", "Bearer portal-fake-principal");
     expect(downloadRes.status).toBe(200);
+    expect(downloadRes.body.data.mimeType).toBe("application/pdf");
+    expect(typeof downloadRes.body.data.fileBase64).toBe("string");
+    expect(downloadRes.body.data.fileBase64.startsWith("JVBERi0")).toBe(true);
 
     const deleteRes = await request(app)
       .delete(`/api/v1/public/declarations/${declarationId}`)
       .set("Authorization", "Bearer portal-fake-principal");
     expect(deleteRes.status).toBe(200);
   });
+
+  it("rejects deleting submitted declaration", async () => {
+    const createRes = await request(app)
+      .post("/api/v1/public/declarations")
+      .set("Authorization", "Bearer portal-fake-principal")
+      .send({
+        templateId: "tpl-002",
+        title: "Submitted declaration",
+        content: { summary: "submitted" }
+      });
+    expect(createRes.status).toBe(201);
+
+    const declarationId = createRes.body.data.id as string;
+
+    const submitRes = await request(app)
+      .put(`/api/v1/public/declarations/${declarationId}`)
+      .set("Authorization", "Bearer portal-fake-principal")
+      .send({
+        status: "submitted",
+        content: { summary: "submitted" }
+      });
+    expect(submitRes.status).toBe(200);
+
+    const deleteRes = await request(app)
+      .delete(`/api/v1/public/declarations/${declarationId}`)
+      .set("Authorization", "Bearer portal-fake-principal");
+    expect(deleteRes.status).toBe(409);
+    expect(deleteRes.body.code).toBe("INVALID_STATE");
+  });
 });
-
-

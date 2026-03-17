@@ -38,7 +38,9 @@ const permissionsMock: PermissionItem[] = [
   { key: "modules.read", module: "modules", action: "read", description: "Read module records" },
   { key: "modules.review", module: "modules", action: "review", description: "Review module records" },
   { key: "analytics.read", module: "analytics", action: "read", description: "Read analytics" },
-  { key: "audits.read", module: "audits", action: "read", description: "Read audit logs" }
+  { key: "audits.read", module: "audits", action: "read", description: "Read audit logs" },
+  { key: "organizations.review", module: "organizations", action: "review", description: "Review organization registration" },
+  { key: "templates.manage", module: "templates", action: "manage", description: "Manage declaration templates" }
 ];
 
 const usersStore: UserItem[] = [

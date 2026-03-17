@@ -7,12 +7,25 @@ export type RequestAuthUser = {
   orgUnitId: string;
   roleHint?: string;
   roles?: string[];
+  isMockToken?: boolean;
 };
 
 type RequestWithAuth = Request & {
   authUser?: RequestAuthUser;
 };
 export type { RequestWithAuth };
+
+export type RequestPortalUser = {
+  authUserId: string;
+  email: string;
+  accountType: "unit" | "principal" | "unknown";
+  isMockToken?: boolean;
+};
+
+type RequestWithPortalAuth = Request & {
+  portalUser?: RequestPortalUser;
+};
+export type { RequestWithPortalAuth };
 
 const unauthorized = (res: Response) =>
   res.status(401).json({
@@ -54,6 +67,14 @@ const readBearerToken = (request: Request): string | null => {
   return token;
 };
 
+const parsePortalAccountType = (value: string | null | undefined): "unit" | "principal" | undefined => {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "unit" || normalized === "principal") {
+    return normalized;
+  }
+  return undefined;
+};
+
 export const requireAuth = async (req: RequestWithAuth, res: Response, next: NextFunction) => {
   const token = readBearerToken(req);
   if (!token) {
@@ -61,13 +82,14 @@ export const requireAuth = async (req: RequestWithAuth, res: Response, next: Nex
   }
 
   // Lightweight fake tokens for deterministic unit tests.
-  if (token.startsWith("fake-")) {
+  if (process.env.NODE_ENV === "test" && token.startsWith("fake-")) {
     const roleHint = token.slice("fake-".length);
     req.authUser = {
       authUserId: `test-${roleHint}`,
       email: `${roleHint}@example.com`,
       orgUnitId: "00000000-0000-0000-0000-000000000001",
-      roleHint
+      roleHint,
+      isMockToken: true
     };
     return next();
   }
@@ -109,7 +131,45 @@ export const requireAuth = async (req: RequestWithAuth, res: Response, next: Nex
     email: adminUser.email ?? data.user.email ?? "",
     orgUnitId: adminUser.org_unit_id,
     roleHint: pickHighestRole(roles),
-    roles
+    roles,
+    isMockToken: false
+  };
+
+  return next();
+};
+
+export const requirePortalAuth = async (req: RequestWithPortalAuth, res: Response, next: NextFunction) => {
+  const token = readBearerToken(req);
+  if (!token) {
+    return unauthorized(res);
+  }
+
+  const requestedAccountType = parsePortalAccountType(req.header("x-portal-account-type"));
+
+  if (process.env.NODE_ENV === "test" && token.startsWith("portal-fake-")) {
+    const tokenAccountType = token === "portal-fake-unit" ? "unit" : token === "portal-fake-principal" ? "principal" : "unknown";
+    req.portalUser = {
+      authUserId: `portal-${tokenAccountType}`,
+      email: `${tokenAccountType}@example.com`,
+      accountType: requestedAccountType ?? tokenAccountType,
+      isMockToken: true
+    };
+    return next();
+  }
+
+  const { data, error } = await supabaseAnon.auth.getUser(token);
+  if (error || !data.user) {
+    return unauthorized(res);
+  }
+
+  const accountTypeRaw = data.user.user_metadata?.account_type;
+  const metadataAccountType = accountTypeRaw === "unit" || accountTypeRaw === "principal" ? accountTypeRaw : "unknown";
+
+  req.portalUser = {
+    authUserId: data.user.id,
+    email: data.user.email ?? "",
+    accountType: requestedAccountType ?? metadataAccountType,
+    isMockToken: false
   };
 
   return next();

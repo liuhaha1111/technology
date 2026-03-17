@@ -3,7 +3,18 @@ import type { RequestWithAuth } from "./auth";
 
 const rolePermissions: Record<string, string[]> = {
   super_admin: ["*"],
-  admin: ["users.read", "users.write", "roles.read", "roles.write", "modules.read", "modules.review", "analytics.read", "audits.read"],
+  admin: [
+    "users.read",
+    "users.write",
+    "roles.read",
+    "roles.write",
+    "modules.read",
+    "modules.review",
+    "analytics.read",
+    "audits.read",
+    "organizations.review",
+    "templates.manage"
+  ],
   analyst: ["modules.read", "modules.review", "analytics.read", "audits.read"],
   viewer: ["modules.read", "analytics.read"]
 };
